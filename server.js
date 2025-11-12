@@ -20,6 +20,57 @@ app.get('/', (req, res) => {
   });
 });
 
+// Test yt-dlp installation
+app.get('/test', async (req, res) => {
+  try {
+    const { spawn } = require('child_process');
+    
+    const result = await new Promise((resolve, reject) => {
+      const childProcess = spawn('yt-dlp', ['--version'], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      childProcess.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      childProcess.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      childProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(new Error(`yt-dlp test failed: ${stderr}`));
+        }
+      });
+      
+      childProcess.on('error', (error) => {
+        reject(error);
+      });
+    });
+    
+    res.json({
+      status: 'OK',
+      ytdlp_version: result.stdout.trim(),
+      tmp_exists: require('fs').existsSync('/tmp'),
+      node_version: process.version
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      status: 'ERROR',
+      error: error.message,
+      tmp_exists: require('fs').existsSync('/tmp'),
+      node_version: process.version
+    });
+  }
+});
+
 // YouTube download endpoint
 app.get('/api/download', async (req, res) => {
   try {
