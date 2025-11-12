@@ -89,7 +89,65 @@ app.get('/api/download', async (req, res) => {
       console.log(`[API] Created /tmp directory`);
     }
 
-    // Try merge formats first
+    // Try alternative methods first
+    const methods = [
+      { type: 'alternative', args: ['--extractor-args', 'youtube:player_client=web,android', '--extractor-args', 'youtube:skip=hls,dash'] },
+      { type: 'ios', args: ['--extractor-args', 'youtube:player_client=ios'] },
+      { type: 'tv', args: ['--extractor-args', 'youtube:player_client=tv_embedded'] }
+    ];
+    
+    // Try each method
+    for (const method of methods) {
+      try {
+        console.log(`[API] Trying method: ${method.type}`);
+        
+        const testArgs = [
+          '--no-warnings',
+          '--no-playlist',
+          '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
+          ...method.args,
+          '--get-url',
+          '--format', '18',
+          url
+        ];
+        
+        const testResult = await runYtDlp(testArgs);
+        const testLines = testResult.stdout.trim().split('\n').filter(l => l.trim());
+        
+        if (testLines.length > 0 && testLines[testLines.length - 1].startsWith('http')) {
+          console.log(`[API] SUCCESS with method ${method.type}!`);
+          const directUrl = testLines[testLines.length - 1];
+          
+          // Get title separately
+          const titleArgs = [
+            '--no-warnings',
+            '--no-playlist',
+            ...method.args,
+            '--get-title',
+            url
+          ];
+          
+          let title = 'YouTube Video';
+          try {
+            const titleResult = await runYtDlp(titleArgs);
+            title = titleResult.stdout.trim() || title;
+          } catch (e) {
+            console.log('[API] Could not get title, using default');
+          }
+          
+          const filename = sanitizeFilename(title) + '.mp4';
+          console.log(`[API] Redirecting to: ${directUrl.substring(0, 100)}...`);
+          
+          res.redirect(302, directUrl);
+          return;
+        }
+      } catch (methodError) {
+        console.log(`[API] Method ${method.type} failed:`, methodError.message);
+        continue;
+      }
+    }
+    
+    // If alternatives failed, try original merge formats
     const mergeFormats = ['135+140', '22'];
     
     for (let i = 0; i < mergeFormats.length; i++) {
