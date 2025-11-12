@@ -105,6 +105,9 @@ app.get('/api/download', async (req, res) => {
           '--no-warnings',
           '--no-playlist',
           '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
+          '--cookies-from-browser', 'chrome',
+          '--extractor-args', 'youtube:player_client=web',
+          '--extractor-args', 'youtube:skip=hls,dash',
           ...method.args,
           '--get-url',
           '--format', '18',
@@ -263,6 +266,59 @@ app.get('/api/download', async (req, res) => {
       // Redirect to direct URL
       res.redirect(302, mediaUrl);
       return;
+    }
+
+    // Last resort - try Invidious API
+    console.log(`[API] All yt-dlp methods failed, trying Invidious API...`);
+    
+    try {
+      const videoId = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/)?.[1];
+      if (!videoId) {
+        throw new Error('Invalid YouTube URL');
+      }
+      
+      const invidiousInstances = [
+        'https://invidious.io',
+        'https://yewtu.be',
+        'https://invidious.snopyta.org'
+      ];
+      
+      for (const instance of invidiousInstances) {
+        try {
+          console.log(`[API] Trying Invidious instance: ${instance}`);
+          
+          const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+          });
+          
+          if (!response.ok) continue;
+          
+          const data = await response.json();
+          
+          // Find best quality format
+          const formats = data.formatStreams || [];
+          const bestFormat = formats
+            .filter(f => f.container === 'mp4' && f.qualityLabel)
+            .sort((a, b) => parseInt(b.qualityLabel) - parseInt(a.qualityLabel))[0];
+          
+          if (bestFormat) {
+            console.log(`[API] SUCCESS with Invidious: ${bestFormat.qualityLabel}`);
+            
+            const filename = sanitizeFilename(data.title || 'YouTube Video') + '.mp4';
+            res.redirect(302, bestFormat.url);
+            return;
+          }
+          
+        } catch (instanceError) {
+          console.log(`[API] Invidious instance ${instance} failed:`, instanceError.message);
+          continue;
+        }
+      }
+      
+    } catch (invidiousError) {
+      console.log(`[API] Invidious API failed:`, invidiousError.message);
     }
 
     throw new Error('All download methods failed');
