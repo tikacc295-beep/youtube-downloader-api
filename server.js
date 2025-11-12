@@ -31,6 +31,13 @@ app.get('/api/download', async (req, res) => {
 
     console.log(`[API] Download request: ${url}, quality: ${quality}`);
 
+    // Ensure /tmp directory exists
+    const fs = require('fs');
+    if (!fs.existsSync('/tmp')) {
+      fs.mkdirSync('/tmp', { recursive: true });
+      console.log(`[API] Created /tmp directory`);
+    }
+
     // Try merge formats first
     const mergeFormats = ['135+140', '22'];
     
@@ -137,9 +144,11 @@ app.get('/api/download', async (req, res) => {
 
   } catch (error) {
     console.error('[API] Error:', error);
+    console.error('[API] Stack:', error.stack);
     res.status(500).json({ 
       error: 'Download failed', 
-      message: error.message 
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -154,11 +163,11 @@ function runYtDlp(args) {
     let stdout = '';
     let stderr = '';
 
-    // Timeout after 30 seconds
+    // Timeout after 20 seconds for Render compatibility
     const timeout = setTimeout(() => {
       childProcess.kill();
       reject(new Error('yt-dlp timeout'));
-    }, 30000);
+    }, 20000);
 
     childProcess.stdout?.on('data', (data) => {
       stdout += data.toString();
