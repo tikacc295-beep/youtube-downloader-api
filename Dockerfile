@@ -8,8 +8,8 @@ RUN apk add --no-cache \
     wget \
     curl
 
-# Install yt-dlp
-RUN pip3 install yt-dlp
+# Install yt-dlp (fix for Alpine Linux pip restrictions)
+RUN pip3 install --break-system-packages yt-dlp
 
 # Create app directory
 WORKDIR /app
