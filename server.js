@@ -1,0 +1,199 @@
+const express = require('express');
+const cors = require('cors');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Health check
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    service: 'YouTube Downloader API',
+    version: '1.0.0'
+  });
+});
+
+// YouTube download endpoint
+app.get('/api/download', async (req, res) => {
+  try {
+    const { url, quality = '720p' } = req.query;
+    
+    if (!url) {
+      return res.status(400).json({ error: 'URL parameter is required' });
+    }
+
+    console.log(`[API] Download request: ${url}, quality: ${quality}`);
+
+    // Try merge formats first
+    const mergeFormats = ['135+140', '22'];
+    
+    for (let i = 0; i < mergeFormats.length; i++) {
+      const format = mergeFormats[i];
+      
+      try {
+        console.log(`[API] Trying format ${i + 1}/${mergeFormats.length}: ${format}`);
+        
+        const tempFile = `/tmp/youtube_${Date.now()}.%(ext)s`;
+        const args = [
+          '--no-warnings',
+          '--no-playlist',
+          '--merge-output-format', 'mp4',
+          '-o', tempFile,
+          '--print', 'title',
+          '--print', 'format_id',
+          '--print', 'resolution',
+          '--print', 'filesize',
+          '--print', 'after_move:filepath',
+          '--format', format,
+          url
+        ];
+
+        const result = await runYtDlp(args);
+        const lines = result.stdout.trim().split('\n').filter(l => l.trim());
+
+        if (lines.length >= 5) {
+          const title = lines[0].trim();
+          const formatId = lines[1].trim();
+          const resolution = lines[2].trim();
+          const filesize = lines[3].trim();
+          const localFilePath = lines[4].trim();
+
+          console.log(`[API] SUCCESS: ${formatId} - ${resolution}`);
+
+          // Check if file exists
+          if (fs.existsSync(localFilePath)) {
+            const stat = fs.statSync(localFilePath);
+            const cleanFilename = sanitizeFilename(title) + '.mp4';
+
+            // Set headers for download
+            res.setHeader('Content-Type', 'video/mp4');
+            res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename}"`);
+            res.setHeader('Content-Length', stat.size);
+            res.setHeader('Accept-Ranges', 'bytes');
+
+            // Stream file and cleanup
+            const fileStream = fs.createReadStream(localFilePath);
+            fileStream.pipe(res);
+            
+            fileStream.on('end', () => {
+              // Cleanup temp file
+              try {
+                fs.unlinkSync(localFilePath);
+                console.log(`[API] Cleaned up: ${localFilePath}`);
+              } catch (err) {
+                console.log(`[API] Cleanup warning:`, err.message);
+              }
+            });
+
+            return; // Success - exit function
+          }
+        }
+      } catch (formatError) {
+        console.log(`[API] Format ${format} failed:`, formatError.message);
+        continue;
+      }
+    }
+
+    // Fallback to direct 360p
+    console.log(`[API] All merge formats failed, trying direct 360p`);
+    
+    const directArgs = [
+      '--no-warnings',
+      '--no-playlist',
+      '--print', 'title',
+      '--print', 'ext',
+      '--print', 'resolution',
+      '--print', 'filesize',
+      '--get-url',
+      '--format', '18',
+      url
+    ];
+
+    const directResult = await runYtDlp(directArgs);
+    const directLines = directResult.stdout.trim().split('\n').filter(l => l.trim());
+
+    if (directLines.length >= 5) {
+      const title = directLines[0];
+      const ext = directLines[1];
+      const resolution = directLines[2];
+      const filesize = directLines[3];
+      const mediaUrl = directLines[4];
+
+      console.log(`[API] Direct fallback: ${resolution}`);
+
+      // Redirect to direct URL
+      res.redirect(302, mediaUrl);
+      return;
+    }
+
+    throw new Error('All download methods failed');
+
+  } catch (error) {
+    console.error('[API] Error:', error);
+    res.status(500).json({ 
+      error: 'Download failed', 
+      message: error.message 
+    });
+  }
+});
+
+// Helper function to run yt-dlp
+function runYtDlp(args) {
+  return new Promise((resolve, reject) => {
+    const childProcess = spawn('yt-dlp', args, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    // Timeout after 30 seconds
+    const timeout = setTimeout(() => {
+      childProcess.kill();
+      reject(new Error('yt-dlp timeout'));
+    }, 30000);
+
+    childProcess.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    childProcess.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    childProcess.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(`yt-dlp failed: ${stderr}`));
+      }
+    });
+
+    childProcess.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+// Helper function to sanitize filename
+function sanitizeFilename(title) {
+  return title
+    .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII characters
+    .replace(/[^\w\s-]/g, '')     // Remove special characters
+    .replace(/\s+/g, '_')         // Replace spaces with underscores
+    .substring(0, 100)            // Limit length
+    .trim();
+}
+
+app.listen(PORT, () => {
+  console.log(`🚀 YouTube Downloader API running on port ${PORT}`);
+});
